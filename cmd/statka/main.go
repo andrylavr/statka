@@ -4,14 +4,48 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+type Config struct {
+	ClickHouse struct {
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Database string `json:"database"`
+	} `json:"clickhouse"`
+	Server struct {
+		Port int `json:"port"`
+	} `json:"server"`
+	Storage struct {
+		FlushInterval int `json:"flush_interval"`
+		RetryMax      int `json:"retry_max"`
+	} `json:"storage"`
+}
+
+func LoadConfig(path string) (*Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var cfg Config
+	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
 
 type Row map[string]string
 
@@ -28,13 +62,13 @@ type Storage struct {
 	db       clickhouse.Conn
 }
 
-func NewStorage() *Storage {
+func NewStorage(cfg *Config) *Storage {
 	client, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{"127.0.0.1:9000"},
+		Addr: []string{fmt.Sprintf("%s:%d", cfg.ClickHouse.Host, cfg.ClickHouse.Port)},
 		Auth: clickhouse.Auth{
-			Database: "default",
-			Username: "default",
-			Password: "",
+			Database: cfg.ClickHouse.Database,
+			Username: cfg.ClickHouse.Username,
+			Password: cfg.ClickHouse.Password,
 		},
 	})
 
@@ -45,17 +79,16 @@ func NewStorage() *Storage {
 	s := &Storage{
 		Tables:   make(map[string]*Table),
 		db:       client,
-		retryMax: 3,
+		retryMax: cfg.Storage.RetryMax,
 	}
 
 	// Каждые 10 секунд сливаем в CH
-	go s.flushLoop()
+	go s.flushLoop(cfg.Storage.FlushInterval)
 	return s
 }
 
-func (s *Storage) flushLoop() {
-	//ticker := time.NewTicker(10 * time.Second)
-	ticker := time.NewTicker(2 * time.Second)
+func (s *Storage) flushLoop(seconds int) {
+	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -76,20 +109,18 @@ func (s *Storage) FlushAll() {
 		if err := s.insertJSONEachRow(tableName, table.Data); err != nil {
 			table.Retry++
 
-			log.Printf("flush %s: %v; Retry: %d", tableName, err, table.Retry)
+			log.Printf("Flush %s: %v; Retry: %d", tableName, err, table.Retry)
 
 			if table.Retry >= s.retryMax {
-				table.Data = table.Data[:0]
-				table.Retry = 0
+				log.Printf("%s DROPPED after %d retries", tableName, s.retryMax)
+				delete(s.Tables, tableName)
 			}
-
-			continue
 		} else {
+			log.Printf("flushed %s: %d rows", tableName, len(table.Data))
+
 			// Очищаем после успешной записи
 			table.Data = table.Data[:0]
 			table.Retry = 0
-
-			log.Printf("flushed %s: %d rows", tableName, len(table.Data))
 		}
 	}
 }
@@ -151,7 +182,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row := queryToRow(r)
+	row := parseRow(r)
 	if len(row) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -161,17 +192,43 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	//w.Write([]byte("{\"ok\":1}"))
+	w.Write([]byte("{\"ok\":1}"))
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "saved",
-		"table":   tableName,
-		"row_len": len(row),
-		"total":   len(storage.Tables[tableName].Data),
-	})
+	//json.NewEncoder(w).Encode(map[string]interface{}{
+	//	"status":  "saved",
+	//	"table":   tableName,
+	//	"row_len": len(row),
+	//	"total":   len(storage.Tables[tableName].Data),
+	//})
 }
 
-func queryToRow(r *http.Request) Row {
+func formToRow(form url.Values) Row {
+	row := make(Row)
+	for k, vs := range form {
+		if len(vs) > 0 {
+			row[k] = vs[0]
+		}
+	}
+	return row
+}
+
+func parsePost(r *http.Request) Row {
+	contentType := r.Header.Get("Content-Type")
+	switch {
+	case strings.Contains(contentType, "application/json"):
+		var row Row
+		if json.NewDecoder(r.Body).Decode(&row) == nil {
+			return row
+		}
+	case strings.Contains(contentType, "application/x-www-form-urlencoded"):
+		if err := r.ParseForm(); err == nil {
+			return formToRow(r.Form)
+		}
+	}
+	return nil
+}
+
+func parseGet(r *http.Request) Row {
 	values := r.URL.Query()
 	row := make(Row, len(values))
 	for k, vs := range values {
@@ -182,10 +239,31 @@ func queryToRow(r *http.Request) Row {
 	return row
 }
 
-var storage = NewStorage()
+func parseRow(r *http.Request) Row {
+	switch r.Method {
+	case http.MethodPost:
+		return parsePost(r)
+	case http.MethodGet:
+		return parseGet(r)
+	default:
+		return nil
+	}
+}
+
+var storage *Storage
 
 func main() {
+	cfg, err := LoadConfig("statka.json")
+	if err != nil {
+		log.Fatalf("config error: %v", err)
+	}
+
+	storage = NewStorage(cfg)
+
 	http.HandleFunc("/", handler)
 
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	log.Printf("Statka ready! Listening on http://localhost%s", addr)
+	log.Printf("Flush every %d sec, retry %d times", cfg.Storage.FlushInterval, cfg.Storage.RetryMax)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }

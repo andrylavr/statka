@@ -1,0 +1,16 @@
+{
+  "clickhouse": {
+    "host": "localhost",
+    "port": 9000,
+    "username": "default",
+    "password": "",
+    "database": "default"
+  },
+  "server": {
+    "port": 8080
+  },
+  "storage": {
+    "flush_interval": 3,
+    "retry_max": 3
+  }
+}
