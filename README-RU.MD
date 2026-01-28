@@ -3,6 +3,17 @@
 **Statka** — минималистичный логгер.
 Принимает события через **GET / POST** (query string, POST JSON, POST Form), буферизирует в памяти и каждые N секунд сливает батчами в **ClickHouse**.
 
+## Как это работает
+Отправляйте события по HTTP на свой сервер в **Statka**:
+`POST /my_another_table {"my_string": "qqq", "my_int": 123}`
+
+И забирайте из **ClickHouse** так:
+```sql
+SELECT my_string
+FROM my_another_table
+WHERE my_int >= 123
+```
+
 ## ✨ Особенности
 
 - События отправляются с помощью
