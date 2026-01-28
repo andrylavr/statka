@@ -28,12 +28,17 @@ type Config struct {
 		Database string `json:"database"`
 	} `json:"clickhouse"`
 	Server struct {
-		Port int `json:"port"`
+		Addr string `json:"addr"`
 	} `json:"server"`
 	Storage struct {
 		FlushInterval int `json:"flush_interval"`
 		RetryMax      int `json:"retry_max"`
 	} `json:"storage"`
+	Cors struct {
+		AllowOrigins []string `json:"allow_origins"`
+		AllowMethods []string `json:"allow_methods"`
+		AllowHeaders []string `json:"allow_headers"`
+	} `json:"cors"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -198,6 +203,24 @@ func (s *Storage) Add(tableName string, row Row) {
 	s.Tables[tableName].Data = append(s.Tables[tableName].Data, row)
 }
 
+func corsMiddleware(cfg *Config, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// CORS заголовки из конфига
+		for _, origin := range cfg.Cors.AllowOrigins {
+			w.Header().Add("Access-Control-Allow-Origin", origin)
+		}
+		w.Header().Set("Access-Control-Allow-Methods", strings.Join(cfg.Cors.AllowMethods, ", "))
+		w.Header().Set("Access-Control-Allow-Headers", strings.Join(cfg.Cors.AllowHeaders, ", "))
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
+}
+
 func handler(w http.ResponseWriter, r *http.Request) {
 	rawName := strings.Trim(r.URL.Path, "/")
 	tableName := sanitizeTableName(rawName)
@@ -294,10 +317,9 @@ func main() {
 		os.Exit(0)
 	}()
 
-	http.HandleFunc("/", handler)
+	http.HandleFunc("/", corsMiddleware(cfg, handler))
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	log.Printf("Statka ready! Listening on http://localhost%s", addr)
+	log.Printf("Statka ready! Listening on %s", cfg.Server.Addr)
 	log.Printf("Flush every %d sec, retry %d times", cfg.Storage.FlushInterval, cfg.Storage.RetryMax)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.ListenAndServe(cfg.Server.Addr, nil))
 }
