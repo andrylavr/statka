@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/google/uuid"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -47,7 +50,7 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-type Row map[string]string
+type Row map[string]interface{}
 
 type Table struct {
 	Name  string `json:"name"`
@@ -162,6 +165,28 @@ func sanitizeTableName(name string) string {
 	return name
 }
 
+func realIP(r *http.Request) string {
+	// X-Forwarded-For, X-Real-IP → реальный IP прокси
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return strings.Split(ip, ",")[0]
+	}
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	return strings.Split(r.RemoteAddr, ":")[0] // fallback
+}
+
+var serverHostname string
+
+func init() {
+	hostname, err := os.Hostname()
+	if err != nil {
+		serverHostname = "unknown"
+	} else {
+		serverHostname = hostname // statka-01, worker-nyc-03, etc.
+	}
+}
+
 func (s *Storage) Add(tableName string, row Row) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,18 +213,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//built-in data
+	row["event_time"] = fmt.Sprintf("%d", time.Now().UTC().UnixMilli())
+	row["request_id"] = uuid.New().String()[:8]
+	row["server_hostname"] = serverHostname
+	row["client_ip"] = realIP(r)
+	row["user_agent"] = r.UserAgent()
+
 	storage.Add(tableName, row)
 
 	w.Header().Set("Content-Type", "application/json")
-
 	w.Write([]byte("{\"ok\":1}"))
-
-	//json.NewEncoder(w).Encode(map[string]interface{}{
-	//	"status":  "saved",
-	//	"table":   tableName,
-	//	"row_len": len(row),
-	//	"total":   len(storage.Tables[tableName].Data),
-	//})
 }
 
 func formToRow(form url.Values) Row {
@@ -220,7 +244,7 @@ func parsePost(r *http.Request) Row {
 		if json.NewDecoder(r.Body).Decode(&row) == nil {
 			return row
 		}
-	case strings.Contains(contentType, "application/x-www-form-urlencoded"):
+	default:
 		if err := r.ParseForm(); err == nil {
 			return formToRow(r.Form)
 		}
@@ -259,6 +283,16 @@ func main() {
 	}
 
 	storage = NewStorage(cfg)
+
+	// Graceful shutdown
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		log.Println("Graceful shutdown...")
+		storage.FlushAll()
+		os.Exit(0)
+	}()
 
 	http.HandleFunc("/", handler)
 
