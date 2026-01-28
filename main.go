@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -18,6 +19,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed statka.json
+var defaultConfig string
 
 type Config struct {
 	ClickHouse struct {
@@ -42,14 +46,23 @@ type Config struct {
 }
 
 func LoadConfig(path string) (*Config, error) {
-	file, err := os.Open(path)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		err := os.WriteFile(path, []byte(defaultConfig), 0644)
+		if err != nil {
+			log.Println("Can't create default config file: " + path)
+		} else {
+			log.Println("Created default config file: " + path)
+		}
+	}
+
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer f.Close()
 
 	var cfg Config
-	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
+	if err := json.NewDecoder(f).Decode(&cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
