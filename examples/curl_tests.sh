@@ -11,7 +11,7 @@ curl -X POST "http://localhost:8080/game_events" \
 # POST form
 curl -X POST "http://localhost:8080/game_events" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "player_id=p999&event_type=buy_skin&skin_id=flame_knife"
+  -d "player_id=p999&event_type=buy_skin"
 
 
 ### Purchases
