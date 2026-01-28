@@ -1,12 +1,13 @@
 CREATE TABLE IF NOT EXISTS game_events
 (
---     built-in fields, you can skip it
+--     built-in fields, you can skip it (change ORDER BY if you remove event_time ;)
     event_time DateTime64(3),
     request_id String,
     server_hostname LowCardinality(String),
     client_ip String,
     user_agent String,
 
+-- user defined custom fields
     player_id String,
     event_type LowCardinality(String),
     level UInt16,
@@ -23,7 +24,9 @@ CREATE TABLE IF NOT EXISTS purchases
     item_name  String,
     price      UInt32,
     currency   String
-) ENGINE=MergeTree() ORDER BY event_time;
+)
+ENGINE = MergeTree
+ORDER BY event_time;
 
 CREATE TABLE IF NOT EXISTS web_clicks
 (
@@ -33,4 +36,6 @@ CREATE TABLE IF NOT EXISTS web_clicks
     user_agent String,
     referrer   String,
     ip         String
-) ENGINE=MergeTree() ORDER BY event_time;
+)
+ENGINE = MergeTree
+ORDER BY event_time;

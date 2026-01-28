@@ -1,11 +1,15 @@
-# Statka — Простой логгер событий. Пишет в ClickHouse 🚀
+# Statka — Очень простой логгер событий для Web
 
 **Statka** — минималистичный логгер.
 Принимает события через **GET / POST** (query string, POST JSON, POST Form), буферизирует в памяти и каждые N секунд сливает батчами в **ClickHouse**.
 
 ## ✨ Особенности
 
-- GET `/mytable?my_string=qqq&my_int=123`, POST JSON, POST form
+- События отправляются с помощью
+  - `GET /mytable?my_string=qqq&my_int=123`
+  - `POST /my_another_table {"my_string": "qqq", "my_int": 123}`
+  - `POST /mytable my_string=qqq&my_int=123`
+- Вы сами выбираете, какой способ Вам подходит
 - Буферизация — копит события, затем отсылает батчем
 - Retry логика — если не получилось, попробовать снова позже, но не более N-раз
 - Конфиг `statka.json` — гибкие настройки
@@ -44,7 +48,52 @@ clickhouse-client -q "SELECT * FROM game_events FORMAT PrettyCompact"
 # Если эти столбцы с дополнительными данными не создавать в таблице, то они не будут сохраняться и отображаться
 ```
 
-## 📊 Примеры посылки событий
+## Примеры создания таблиц для событий
+```sql
+CREATE TABLE IF NOT EXISTS game_events
+(
+--     built-in fields
+    event_time DateTime64(3),
+    request_id String,
+    server_hostname LowCardinality(String),
+    client_ip String,
+    user_agent String,
+
+-- user defined custom fields
+    player_id String,
+    event_type LowCardinality(String),
+    level UInt16,
+    weapon String
+)
+ENGINE = MergeTree
+ORDER BY event_time;
+
+CREATE TABLE IF NOT EXISTS purchases
+(
+    event_time DateTime64(3) DEFAULT now(),
+    player_id  String,
+    item_id    String,
+    item_name  String,
+    price      UInt32,
+    currency   String
+)
+ENGINE = MergeTree
+ORDER BY event_time;
+
+CREATE TABLE IF NOT EXISTS web_clicks
+(
+    event_time DateTime64(3),
+    session_id String,
+    page_url   String,
+    user_agent String,
+    referrer   String,
+    ip         String
+)
+ENGINE = MergeTree
+ORDER BY event_time;
+```
+
+## 📨 Примеры отправки событий
 ### 🎮 Игровые события
 ```bash
 # GET
@@ -72,8 +121,40 @@ curl -X POST "http://localhost:8080/purchases" \
 curl "http://localhost:8080/purchases?player_id=p789\&item_id=ammo_9mm\&price=5¤cy=USD"
 ```
 
-### 🌐 Веб аналитика
+### 👀 Веб аналитика
 
 ```bash
 curl "http://localhost:8080/web_clicks?session_id=abc123\&page_url=/shop/weapons\&ip=185.23.45.67"
+```
+
+### 🌍 Отправляем события из браузера
+```js
+
+async function logEvent(table, data) {
+    try {
+        const response = await fetch(`http://localhost:8080/${table}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        console.log('✅ Event logged:', result);  // {ok: 1}
+    } catch (error) {
+        console.error('❌ Ошибка отправки:', error);
+    }
+}
+
+// 🎮 Примеры использования
+logEvent('game_events', {
+    player_id: 'p123',
+    event_type: 'level_up',
+    level: 15
+});
+
+logEvent('purchases', {
+    player_id: 'p456',
+    item_id: 'skin_gold_ak47',
+    price: 499
+});
 ```
