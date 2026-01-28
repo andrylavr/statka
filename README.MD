@@ -13,6 +13,25 @@ FROM my_another_table
 WHERE my_int >= 123
 ```
 
+## 🛠️ Install
+```shell
+git clone https://github.com/andrylavr/statka
+cd statka
+make
+sudo make install
+make clean
+systemctl status statka
+```
+
+✅ After installation, the service will be available at http://localhost:8080! 🚀
+You can always change the port in the config file `/opt/statka/statka.json`
+
+## ⚙️ Change config after install
+```shell
+sudo nano /opt/statka/statka.json
+sudo systemctl restart statka
+```
+
 ## ✨ Features
 
 - Events sent via:

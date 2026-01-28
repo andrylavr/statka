@@ -1,0 +1,13 @@
+[Unit]
+Description=Statka Event Logger
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/statka
+ExecStart=/opt/statka/statka
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
