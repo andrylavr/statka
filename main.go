@@ -139,6 +139,16 @@ func (s *Storage) insertJSONEachRow(tableName string, rows []Row) error {
 	}
 
 	var buf bytes.Buffer
+	buf.WriteString(
+		fmt.Sprintf(
+			"INSERT INTO `%s` "+
+				"SETTINGS input_format_allow_errors_num = %d, input_format_allow_errors_ratio = 1 "+
+				"FORMAT JSONEachRow ",
+			tableName,
+			len(rows),
+		),
+	)
+
 	for _, row := range rows {
 		data, _ := json.Marshal(row)
 		buf.Write(data)
@@ -146,7 +156,7 @@ func (s *Storage) insertJSONEachRow(tableName string, rows []Row) error {
 	}
 
 	ctx := context.Background()
-	query := "INSERT INTO " + tableName + " FORMAT JSONEachRow " + buf.String()
+	query := buf.String()
 	err := s.db.Exec(ctx, query)
 	return err
 }
